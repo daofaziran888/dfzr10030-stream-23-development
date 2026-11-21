@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.recovery.seed_recovery import bootstrap as bootstrap_recovery
 from app.routers import ROUTERS
 from app.routers.pipeline import router as pipeline_router
 from app.store import store
@@ -26,6 +27,9 @@ app.add_middleware(
 for module in ROUTERS:
     app.include_router(module.router)
 app.include_router(pipeline_router)
+
+# 引导恢复检查点状态转换子系统的示例数据（幂等）。
+bootstrap_recovery()
 
 
 @app.get("/api/health")

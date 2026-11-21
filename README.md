@@ -68,6 +68,34 @@ npm run dev
 | 历史回放 | `replay_batch` | 回放任务 | 任务编号、数据源、起始时间 |
 | 分组分区 | `grp_partition` | 分组策略 | 策略编号、关联流、分区键 |
 
+## 恢复检查点状态转换子系统
+
+旧检查点位点与结构演进记录原先各自登记，缺少判断“哪些旧位点还能恢复”的数据。
+`app/recovery/` 在既有模块之上补了一套围绕**状态格式转换批次**的恢复控制面，
+前端入口为「恢复检查点转换」页面（路由 `/recovery`），接口前缀 `/api/recovery`。
+
+| 需求 | 落地位置 |
+| --- | --- |
+| 旧位点与结构演进各自登记，并判定可恢复性 | `registry_service.py`：沿演进链 `from→to` 计算格式路径，结合算子版本在线情况标记「可恢复/不可恢复」 |
+| 新增恢复检查点状态转换 | `errors.py` 集中状态机；转换结果回写 `_recovery_checkpoints` 清单 |
+| 用转换批次确定每次结构切换后能读的数据 | `conversion_service.py`：批次暂存转换、整体提交后才对外可读 |
+| 校验流水线上下游依赖、兼容存量位点与字段映射 | `pipeline.py`（DAG、拓扑序、依赖链可用性）+ `field_mapping.py`（keep/rename/default/drop） |
+| 回滚只能整体切回完整版本 | `rollback()` 清空全部暂存、丢弃半转换内容；位点在转换中原样保留不漂移 |
+| 版本切换与恢复时效冲突 | `coordinator_service.begin_cutover()`：恢复队列未排空时拒绝新结构接收数据 |
+| 每个恢复批只装载一套内部兼容状态 | `process_recovery_batch()`：校验整批同一钉住版本，混装/依赖离线整批拒绝 |
+| 已完成旧恢复按实际装载格式追查 | 状态快照 `format_history` 与检查点 `last_load_format` 全程留痕 |
+| 演进消费批次校验实际生效范围 | `consume_batch_for_evolution()`：批次范围超出演进声明即拒绝 |
+| 有依赖次序的两个算子切换验证 | `validate_ordered_switch()`：上游不先就绪则拒绝，输出允许/拒绝结论 |
+| 转换一半停止服务，重启读回完整批次 | `run_conversion(crash_after_items=)` 模拟崩溃，`recover_inflight()` 重启整体回滚后可重发 |
+| 核对活动位点与数据库导出输入范围 | `reconcile_positions()`：识别缺口、倒退、缺失与全覆盖 |
+
+子系统测试：
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/test_recovery_*.py   # 38 个领域用例
+cd frontend && npx playwright test tests/recovery.spec.ts           # 5 个端到端场景
+```
+
 ## 约定
 
 - 每个模块的前端页面在 `frontend/src/views/<模块>/index.vue`，后端接口在
